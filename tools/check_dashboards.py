@@ -39,6 +39,17 @@ def query(url: str, user: str, password: str, sql: str) -> list:
         return json.loads(r.read())["data"]
 
 
+UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400, "w": 7 * 86400, "M": 30 * 86400, "y": 365 * 86400}
+
+
+def panel_from(panel: dict, default_from: int, t_to: int) -> int:
+    """Honor a panel's relative-time override such as "2y" / "90d"."""
+    tf = panel.get("timeFrom") or ""
+    if len(tf) >= 2 and tf[:-1].isdigit() and tf[-1] in UNIT_SECONDS:
+        return t_to - int(tf[:-1]) * UNIT_SECONDS[tf[-1]]
+    return default_from
+
+
 def walk(panels):
     for p in panels:
         yield from walk(p.get("panels", []))
@@ -63,13 +74,14 @@ def main() -> None:
     for f in sorted((REPO / "grafana/dashboards").glob("*.json")):
         d = json.loads(f.read_text())
         tz = next(v["query"] for v in d["templating"]["list"] if v["name"] == "tz")
-        items = [(f"var {v['name']}", v["query"]) for v in d["templating"]["list"] if v["type"] == "query"]
-        items += [(p["title"], t["rawSql"]) for p in walk(d["panels"]) for t in p.get("targets", [])]
+        items = [(f"var {v['name']}", v["query"], t_from) for v in d["templating"]["list"] if v["type"] == "query"]
+        items += [(p["title"] + (f"  [{p['timeFrom']}]" if p.get("timeFrom") else ""), t["rawSql"], panel_from(p, t_from, t_to))
+                  for p in walk(d["panels"]) for t in p.get("targets", [])]
         print(f"\n{f.name}")
-        for title, sql in items:
+        for title, sql, p_from in items:
             total += 1
             try:
-                rows = query(args.url, args.user, pw, expand(sql, args.database, tz, t_from, t_to, variables))
+                rows = query(args.url, args.user, pw, expand(sql, args.database, tz, p_from, t_to, variables))
             except urllib.error.HTTPError as e:
                 failures += 1
                 print(f"  FAIL  {title}\n        {e.read().decode().strip()[:400]}")

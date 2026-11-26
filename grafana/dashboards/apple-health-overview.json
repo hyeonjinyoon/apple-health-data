@@ -1,7 +1,7 @@
 {
   "uid": "apple-health-overview",
   "title": "Apple Health",
-  "description": "iPhone 건강 데이터 종합 대시보드 (중요도순)",
+  "description": "건강 데이터 종합 — 중요도순. 일별 패널은 선택한 기간, '(월별)' 패널은 항상 최근 2년",
   "tags": [
     "apple-health"
   ],
@@ -629,7 +629,7 @@
     {
       "type": "row",
       "id": 10,
-      "title": "① 수면",
+      "title": "핵심 지표 점검표",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -640,8 +640,191 @@
       "panels": []
     },
     {
+      "type": "table",
+      "title": "최근 30일 vs 직전 31–90일 vs 1년 전 같은 30일",
+      "description": "대시보드 시간 범위와 무관하게 항상 오늘 기준으로 계산합니다. 개선/악화는 각 지표의 바람직한 방향 기준이며 ±3%(시각은 ±15분) 이내는 '유지'. '변화'는 좋고 나쁨을 판단하지 않는 지표. 의학적 판단이 아닌 추세 참고용입니다.",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH seg AS (\n    SELECT toDate(end_time + INTERVAL 6 HOUR, '${tz}') AS night, source_name, category,\n           dateDiff('second', start_time, end_time) AS secs, start_time, end_time\n    FROM ${db}.samples FINAL\n    WHERE type = 'sleep_analysis' AND category != 'in_bed' AND end_time > now() - INTERVAL 400 DAY\n),\nbest AS (\n    SELECT night, argMax(source_name, asleep) AS src\n    FROM (SELECT night, source_name, sumIf(secs, category LIKE 'asleep%') AS asleep\n          FROM seg GROUP BY night, source_name)\n    GROUP BY night\n),\nnights AS (\n    SELECT seg.night AS night, seg.source_name AS source_name, seg.category AS category,\n           seg.secs AS secs, seg.start_time AS start_time, seg.end_time AS end_time\n    FROM seg INNER JOIN best ON seg.night = best.night AND seg.source_name = best.src\n),\nper AS (\n    SELECT night, night AS d, sumIf(secs, category LIKE 'asleep%') / 3600 AS h, (toHour(minIf(start_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(minIf(start_time, category LIKE 'asleep%'), '${tz}') + 360) % 1440 AS bed_m, toHour(maxIf(end_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(maxIf(end_time, category LIKE 'asleep%'), '${tz}') AS wake_m\n    FROM nights GROUP BY night HAVING h >= 2\n),\ndaily AS (\n    SELECT toDate(bucket_start, '${tz}') AS d, sumIf(value, type = 'step_count') AS steps,\n           sumIf(value, type = 'active_energy') AS active, sumIf(value, type = 'exercise_time') AS ex,\n           sumIf(value, type = 'stand_time') AS stand\n    FROM ${db}.quantity_stats FINAL\n    WHERE bucket_start > now() - INTERVAL 400 DAY\n    GROUP BY d HAVING steps > 0 AND d < toDate(now(), '${tz}')\n),\nsamp AS (\n    SELECT type, toDate(start_time, '${tz}') AS d, value FROM ${db}.samples FINAL\n    WHERE start_time > now() - INTERVAL 400 DAY AND type IN ('body_fat_percentage', 'body_mass', 'heart_rate_variability', 'lean_body_mass', 'resting_heart_rate', 'vo2_max', 'walking_asymmetry', 'walking_heart_rate_average', 'walking_speed')\n),\nwk AS (SELECT toDate(start_time, '${tz}') AS d FROM ${db}.workouts FINAL WHERE start_time > now() - INTERVAL 400 DAY),\nm AS (\n    SELECT 1 AS ord, '수면 시간' AS name, round(toFloat64(avgIf(h, 1 AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(h, 1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(h, 1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM per\n    UNION ALL\n    SELECT 2 AS ord, '6시간 미만으로 잔 밤' AS name, round(toFloat64(avgIf(if(h < 6, 100, 0), 1 AND d >= toDate(now(), '${tz}') - 30)), 0) AS cur, round(toFloat64(avgIf(if(h < 6, 100, 0), 1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 0) AS prev, round(toFloat64(avgIf(if(h < 6, 100, 0), 1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 0) AS ya FROM per\n    UNION ALL\n    SELECT 3 AS ord, '잠든 시각' AS name, round(toFloat64(avgIf(bed_m, 1 AND d >= toDate(now(), '${tz}') - 30)), 0) AS cur, round(toFloat64(avgIf(bed_m, 1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 0) AS prev, round(toFloat64(avgIf(bed_m, 1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 0) AS ya FROM per\n    UNION ALL\n    SELECT 4 AS ord, '취침 시각 들쭉날쭉 (표준편차)' AS name, round(toFloat64(if(countIf(1 AND d >= toDate(now(), '${tz}') - 30) < 3, nan, stddevPopIf(bed_m, 1 AND d >= toDate(now(), '${tz}') - 30))), 0) AS cur, round(toFloat64(if(countIf(1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31) < 3, nan, stddevPopIf(bed_m, 1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31))), 0) AS prev, round(toFloat64(if(countIf(1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366) < 3, nan, stddevPopIf(bed_m, 1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366))), 0) AS ya FROM per\n    UNION ALL\n    SELECT 5 AS ord, '안정시 심박' AS name, round(toFloat64(avgIf(value, type = 'resting_heart_rate' AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(value, type = 'resting_heart_rate' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(value, type = 'resting_heart_rate' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM samp\n    UNION ALL\n    SELECT 6 AS ord, '심박 변이도 (HRV)' AS name, round(toFloat64(avgIf(value, type = 'heart_rate_variability' AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(value, type = 'heart_rate_variability' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(value, type = 'heart_rate_variability' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM samp\n    UNION ALL\n    SELECT 7 AS ord, 'VO₂ max' AS name, round(toFloat64(avgIf(value, type = 'vo2_max' AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(value, type = 'vo2_max' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(value, type = 'vo2_max' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM samp\n    UNION ALL\n    SELECT 8 AS ord, '걷기 평균 심박' AS name, round(toFloat64(avgIf(value, type = 'walking_heart_rate_average' AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(value, type = 'walking_heart_rate_average' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(value, type = 'walking_heart_rate_average' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM samp\n    UNION ALL\n    SELECT 9 AS ord, '운동 시간' AS name, round(toFloat64(avgIf(ex, 1 AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(ex, 1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(ex, 1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM daily\n    UNION ALL\n    SELECT 10 AS ord, '운동 기록 횟수' AS name, round(toFloat64(countIf(1 AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(countIf(1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31) / 2), 1) AS prev, round(toFloat64(countIf(1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM wk\n    UNION ALL\n    SELECT 11 AS ord, '활동 에너지' AS name, round(toFloat64(avgIf(active, 1 AND d >= toDate(now(), '${tz}') - 30)), 0) AS cur, round(toFloat64(avgIf(active, 1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 0) AS prev, round(toFloat64(avgIf(active, 1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 0) AS ya FROM daily\n    UNION ALL\n    SELECT 12 AS ord, '걸음 수' AS name, round(toFloat64(avgIf(steps, 1 AND d >= toDate(now(), '${tz}') - 30)), 0) AS cur, round(toFloat64(avgIf(steps, 1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 0) AS prev, round(toFloat64(avgIf(steps, 1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 0) AS ya FROM daily\n    UNION ALL\n    SELECT 13 AS ord, '스탠드 시간' AS name, round(toFloat64(avgIf(stand, 1 AND d >= toDate(now(), '${tz}') - 30)), 0) AS cur, round(toFloat64(avgIf(stand, 1 AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 0) AS prev, round(toFloat64(avgIf(stand, 1 AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 0) AS ya FROM daily\n    UNION ALL\n    SELECT 14 AS ord, '걷기 비대칭' AS name, round(toFloat64(avgIf(value * 100, type = 'walking_asymmetry' AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(value * 100, type = 'walking_asymmetry' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(value * 100, type = 'walking_asymmetry' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM samp\n    UNION ALL\n    SELECT 15 AS ord, '걷기 속도' AS name, round(toFloat64(avgIf(value * 3.6, type = 'walking_speed' AND d >= toDate(now(), '${tz}') - 30)), 2) AS cur, round(toFloat64(avgIf(value * 3.6, type = 'walking_speed' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 2) AS prev, round(toFloat64(avgIf(value * 3.6, type = 'walking_speed' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 2) AS ya FROM samp\n    UNION ALL\n    SELECT 16 AS ord, '체중' AS name, round(toFloat64(avgIf(value, type = 'body_mass' AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(value, type = 'body_mass' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(value, type = 'body_mass' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM samp\n    UNION ALL\n    SELECT 17 AS ord, '제지방량' AS name, round(toFloat64(avgIf(value, type = 'lean_body_mass' AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(value, type = 'lean_body_mass' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(value, type = 'lean_body_mass' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM samp\n    UNION ALL\n    SELECT 18 AS ord, '체지방률' AS name, round(toFloat64(avgIf(value * 100, type = 'body_fat_percentage' AND d >= toDate(now(), '${tz}') - 30)), 1) AS cur, round(toFloat64(avgIf(value * 100, type = 'body_fat_percentage' AND d BETWEEN toDate(now(), '${tz}') - 90 AND toDate(now(), '${tz}') - 31)), 1) AS prev, round(toFloat64(avgIf(value * 100, type = 'body_fat_percentage' AND d BETWEEN toDate(now(), '${tz}') - 395 AND toDate(now(), '${tz}') - 366)), 1) AS ya FROM samp\n)\nSELECT name AS `지표`,\n  multiIf(ord = 1, if(isNaN(cur), '–', concat(toString(cur), '시간')), ord = 2, if(isNaN(cur), '–', concat(toString(cur), '%')), ord = 3, if(isNaN(cur), '–', formatDateTime(toDateTime('2000-01-01 18:00:00') + toIntervalMinute(toUInt32(greatest(round(cur), 0))), '%H:%i')), ord = 4, if(isNaN(cur), '–', concat(toString(cur), '분')), ord = 5, if(isNaN(cur), '–', concat(toString(cur), ' bpm')), ord = 6, if(isNaN(cur), '–', concat(toString(cur), ' ms')), ord = 7, if(isNaN(cur), '–', concat(toString(cur), '')), ord = 8, if(isNaN(cur), '–', concat(toString(cur), ' bpm')), ord = 9, if(isNaN(cur), '–', concat(toString(cur), '분/일')), ord = 10, if(isNaN(cur), '–', concat(toString(cur), '회/30일')), ord = 11, if(isNaN(cur), '–', concat(toString(cur), ' kcal/일')), ord = 12, if(isNaN(cur), '–', concat(toString(cur), '보/일')), ord = 13, if(isNaN(cur), '–', concat(toString(cur), '분/일')), ord = 14, if(isNaN(cur), '–', concat(toString(cur), '%')), ord = 15, if(isNaN(cur), '–', concat(toString(cur), ' km/h')), ord = 16, if(isNaN(cur), '–', concat(toString(cur), ' kg')), ord = 17, if(isNaN(cur), '–', concat(toString(cur), ' kg')), ord = 18, if(isNaN(cur), '–', concat(toString(cur), '%')), '–') AS `최근 30일`,\n  multiIf(ord = 1, if(isNaN(prev), '–', concat(toString(prev), '시간')), ord = 2, if(isNaN(prev), '–', concat(toString(prev), '%')), ord = 3, if(isNaN(prev), '–', formatDateTime(toDateTime('2000-01-01 18:00:00') + toIntervalMinute(toUInt32(greatest(round(prev), 0))), '%H:%i')), ord = 4, if(isNaN(prev), '–', concat(toString(prev), '분')), ord = 5, if(isNaN(prev), '–', concat(toString(prev), ' bpm')), ord = 6, if(isNaN(prev), '–', concat(toString(prev), ' ms')), ord = 7, if(isNaN(prev), '–', concat(toString(prev), '')), ord = 8, if(isNaN(prev), '–', concat(toString(prev), ' bpm')), ord = 9, if(isNaN(prev), '–', concat(toString(prev), '분/일')), ord = 10, if(isNaN(prev), '–', concat(toString(prev), '회/30일')), ord = 11, if(isNaN(prev), '–', concat(toString(prev), ' kcal/일')), ord = 12, if(isNaN(prev), '–', concat(toString(prev), '보/일')), ord = 13, if(isNaN(prev), '–', concat(toString(prev), '분/일')), ord = 14, if(isNaN(prev), '–', concat(toString(prev), '%')), ord = 15, if(isNaN(prev), '–', concat(toString(prev), ' km/h')), ord = 16, if(isNaN(prev), '–', concat(toString(prev), ' kg')), ord = 17, if(isNaN(prev), '–', concat(toString(prev), ' kg')), ord = 18, if(isNaN(prev), '–', concat(toString(prev), '%')), '–') AS `직전 31–90일`,\n  multiIf(ord = 1, if(isNaN(ya), '–', concat(toString(ya), '시간')), ord = 2, if(isNaN(ya), '–', concat(toString(ya), '%')), ord = 3, if(isNaN(ya), '–', formatDateTime(toDateTime('2000-01-01 18:00:00') + toIntervalMinute(toUInt32(greatest(round(ya), 0))), '%H:%i')), ord = 4, if(isNaN(ya), '–', concat(toString(ya), '분')), ord = 5, if(isNaN(ya), '–', concat(toString(ya), ' bpm')), ord = 6, if(isNaN(ya), '–', concat(toString(ya), ' ms')), ord = 7, if(isNaN(ya), '–', concat(toString(ya), '')), ord = 8, if(isNaN(ya), '–', concat(toString(ya), ' bpm')), ord = 9, if(isNaN(ya), '–', concat(toString(ya), '분/일')), ord = 10, if(isNaN(ya), '–', concat(toString(ya), '회/30일')), ord = 11, if(isNaN(ya), '–', concat(toString(ya), ' kcal/일')), ord = 12, if(isNaN(ya), '–', concat(toString(ya), '보/일')), ord = 13, if(isNaN(ya), '–', concat(toString(ya), '분/일')), ord = 14, if(isNaN(ya), '–', concat(toString(ya), '%')), ord = 15, if(isNaN(ya), '–', concat(toString(ya), ' km/h')), ord = 16, if(isNaN(ya), '–', concat(toString(ya), ' kg')), ord = 17, if(isNaN(ya), '–', concat(toString(ya), ' kg')), ord = 18, if(isNaN(ya), '–', concat(toString(ya), '%')), '–') AS `1년 전 같은 30일`,\n  multiIf(ord = 1, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 2, if(isNaN(cur) OR isNaN(prev), '–', concat(if(abs((cur - prev)) < 3, '유지', if(((cur - prev) > 0) = 0, '개선', '악화')), ' ', concat(if((cur - prev) >= 0, '+', ''), toString(round((cur - prev))), '%p'))), ord = 3, if(isNaN(cur) OR isNaN(prev), '–', concat(if(abs((cur - prev)) < 15, '유지', if(((cur - prev) > 0) = 0, '개선', '악화')), ' ', concat(if((cur - prev) >= 0, '+', ''), toString(round((cur - prev))), '분'))), ord = 4, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 0, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 5, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 0, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 6, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 7, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 8, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 0, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 9, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 10, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 11, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 12, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 13, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 14, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 0, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 15, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 16, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat('변화 ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 17, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat(if(abs(((cur - prev) / abs(prev) * 100)) < 3, '유지', if((((cur - prev) / abs(prev) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), ord = 18, if(isNaN(cur) OR isNaN(prev) OR prev = 0, '–', concat('변화 ', concat(if(((cur - prev) / abs(prev) * 100) >= 0, '+', ''), toString(round(((cur - prev) / abs(prev) * 100))), '%'))), '–') AS `직전 대비`,\n  multiIf(ord = 1, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 2, if(isNaN(cur) OR isNaN(ya), '–', concat(if(abs((cur - ya)) < 3, '유지', if(((cur - ya) > 0) = 0, '개선', '악화')), ' ', concat(if((cur - ya) >= 0, '+', ''), toString(round((cur - ya))), '%p'))), ord = 3, if(isNaN(cur) OR isNaN(ya), '–', concat(if(abs((cur - ya)) < 15, '유지', if(((cur - ya) > 0) = 0, '개선', '악화')), ' ', concat(if((cur - ya) >= 0, '+', ''), toString(round((cur - ya))), '분'))), ord = 4, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 0, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 5, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 0, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 6, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 7, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 8, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 0, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 9, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 10, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 11, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 12, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 13, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 14, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 0, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 15, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 16, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat('변화 ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 17, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat(if(abs(((cur - ya) / abs(ya) * 100)) < 3, '유지', if((((cur - ya) / abs(ya) * 100) > 0) = 1, '개선', '악화')), ' ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), ord = 18, if(isNaN(cur) OR isNaN(ya) OR ya = 0, '–', concat('변화 ', concat(if(((cur - ya) / abs(ya) * 100) >= 0, '+', ''), toString(round(((cur - ya) / abs(ya) * 100))), '%'))), '–') AS `1년 전 대비`\nFROM m ORDER BY ord",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "minWidth": 50
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "직전 대비"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^개선.*",
+                      "result": {
+                        "color": "#0aac23",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^악화.*",
+                      "result": {
+                        "color": "#f18a59",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^(유지|변화).*",
+                      "result": {
+                        "color": "#8e8e8e",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "1년 전 대비"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^개선.*",
+                      "result": {
+                        "color": "#0aac23",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^악화.*",
+                      "result": {
+                        "color": "#f18a59",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^(유지|변화).*",
+                      "result": {
+                        "color": "#8e8e8e",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "지표"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 230
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 20
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "row",
+      "id": 12,
+      "title": "① 수면",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
       "type": "timeseries",
-      "title": "총 수면 시간",
+      "title": "총 수면 시간 (일별)",
       "description": "회색 선: 권장 최소 7시간",
       "targets": [
         {
@@ -758,11 +941,11 @@
           "sort": "none"
         }
       },
-      "id": 11,
+      "id": 13,
       "gridPos": {
         "x": 0,
-        "y": 6,
-        "w": 12,
+        "y": 27,
+        "w": 8,
         "h": 9
       },
       "datasource": {
@@ -772,7 +955,7 @@
     },
     {
       "type": "timeseries",
-      "title": "수면 단계",
+      "title": "수면 단계 (일별)",
       "description": "기상일 기준. 같은 밤을 여러 앱/기기가 기록했다면 수면 시간이 가장 긴 소스 하나만 사용",
       "targets": [
         {
@@ -909,11 +1092,11 @@
           "sort": "none"
         }
       },
-      "id": 12,
+      "id": 14,
       "gridPos": {
-        "x": 12,
-        "y": 6,
-        "w": 12,
+        "x": 8,
+        "y": 27,
+        "w": 8,
         "h": 9
       },
       "datasource": {
@@ -922,8 +1105,262 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "월평균 수면 시간",
+      "description": "회색 선: 권장 최소 7시간. 2시간 이상 잔 밤만 포함",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "WITH seg AS (\n    SELECT toDate(end_time + INTERVAL 6 HOUR, '${tz}') AS night, source_name, category,\n           dateDiff('second', start_time, end_time) AS secs, start_time, end_time\n    FROM ${db}.samples FINAL\n    WHERE type = 'sleep_analysis' AND category != 'in_bed' AND end_time >= toStartOfDay($__fromTime, '${tz}') - INTERVAL 6 HOUR AND end_time < $__toTime\n),\nbest AS (\n    SELECT night, argMax(source_name, asleep) AS src\n    FROM (SELECT night, source_name, sumIf(secs, category LIKE 'asleep%') AS asleep\n          FROM seg GROUP BY night, source_name)\n    GROUP BY night\n),\nnights AS (\n    SELECT seg.night AS night, seg.source_name AS source_name, seg.category AS category,\n           seg.secs AS secs, seg.start_time AS start_time, seg.end_time AS end_time\n    FROM seg INNER JOIN best ON seg.night = best.night AND seg.source_name = best.src\n),\nper AS (\n    SELECT night, night AS d, sumIf(secs, category LIKE 'asleep%') / 3600 AS h, (toHour(minIf(start_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(minIf(start_time, category LIKE 'asleep%'), '${tz}') + 360) % 1440 AS bed_m, toHour(maxIf(end_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(maxIf(end_time, category LIKE 'asleep%'), '${tz}') AS wake_m\n    FROM nights GROUP BY night HAVING h >= 2\n)\nSELECT toDateTime(toStartOfMonth(night), '${tz}') AS time, avg(h) AS `평균 수면 시간`\nFROM per GROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: 시간",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": null,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8e8e8e",
+                "value": 7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 15,
+      "gridPos": {
+        "x": 16,
+        "y": 27,
+        "w": 8,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "6시간 미만으로 잔 밤의 비율 (월별)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "WITH seg AS (\n    SELECT toDate(end_time + INTERVAL 6 HOUR, '${tz}') AS night, source_name, category,\n           dateDiff('second', start_time, end_time) AS secs, start_time, end_time\n    FROM ${db}.samples FINAL\n    WHERE type = 'sleep_analysis' AND category != 'in_bed' AND end_time >= toStartOfDay($__fromTime, '${tz}') - INTERVAL 6 HOUR AND end_time < $__toTime\n),\nbest AS (\n    SELECT night, argMax(source_name, asleep) AS src\n    FROM (SELECT night, source_name, sumIf(secs, category LIKE 'asleep%') AS asleep\n          FROM seg GROUP BY night, source_name)\n    GROUP BY night\n),\nnights AS (\n    SELECT seg.night AS night, seg.source_name AS source_name, seg.category AS category,\n           seg.secs AS secs, seg.start_time AS start_time, seg.end_time AS end_time\n    FROM seg INNER JOIN best ON seg.night = best.night AND seg.source_name = best.src\n),\nper AS (\n    SELECT night, night AS d, sumIf(secs, category LIKE 'asleep%') / 3600 AS h, (toHour(minIf(start_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(minIf(start_time, category LIKE 'asleep%'), '${tz}') + 360) % 1440 AS bed_m, toHour(maxIf(end_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(maxIf(end_time, category LIKE 'asleep%'), '${tz}') AS wake_m\n    FROM nights GROUP BY night HAVING h >= 2\n)\nSELECT toDateTime(toStartOfMonth(night), '${tz}') AS time, countIf(h < 6) / count() * 100 AS `6시간 미만`\nFROM per GROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "barAlignment": 1,
+            "barWidthFactor": 0.7,
+            "showPoints": "never",
+            "pointSize": 7,
+            "spanNulls": false,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 16,
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "평균 잠든 시각 (월별, 자정 기준 ± 시간)",
+      "description": "0 = 자정, 1.5 = 01:30, -0.5 = 23:30. 회색 선: 01:00",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "WITH seg AS (\n    SELECT toDate(end_time + INTERVAL 6 HOUR, '${tz}') AS night, source_name, category,\n           dateDiff('second', start_time, end_time) AS secs, start_time, end_time\n    FROM ${db}.samples FINAL\n    WHERE type = 'sleep_analysis' AND category != 'in_bed' AND end_time >= toStartOfDay($__fromTime, '${tz}') - INTERVAL 6 HOUR AND end_time < $__toTime\n),\nbest AS (\n    SELECT night, argMax(source_name, asleep) AS src\n    FROM (SELECT night, source_name, sumIf(secs, category LIKE 'asleep%') AS asleep\n          FROM seg GROUP BY night, source_name)\n    GROUP BY night\n),\nnights AS (\n    SELECT seg.night AS night, seg.source_name AS source_name, seg.category AS category,\n           seg.secs AS secs, seg.start_time AS start_time, seg.end_time AS end_time\n    FROM seg INNER JOIN best ON seg.night = best.night AND seg.source_name = best.src\n),\nper AS (\n    SELECT night, night AS d, sumIf(secs, category LIKE 'asleep%') / 3600 AS h, (toHour(minIf(start_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(minIf(start_time, category LIKE 'asleep%'), '${tz}') + 360) % 1440 AS bed_m, toHour(maxIf(end_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(maxIf(end_time, category LIKE 'asleep%'), '${tz}') AS wake_m\n    FROM nights GROUP BY night HAVING h >= 2\n)\nSELECT toDateTime(toStartOfMonth(night), '${tz}') AS time, (avg(bed_m) - 360) / 60 AS `잠든 시각`\nFROM per GROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: 시",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": null,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8e8e8e",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 17,
+      "gridPos": {
+        "x": 12,
+        "y": 36,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
       "type": "table",
-      "title": "수면 기록",
+      "title": "최근 12주 수면",
       "description": "",
       "targets": [
         {
@@ -931,7 +1368,7 @@
           "editorType": "sql",
           "format": 1,
           "queryType": "table",
-          "rawSql": "WITH seg AS (\n    SELECT toDate(end_time + INTERVAL 6 HOUR, '${tz}') AS night, source_name, category,\n           dateDiff('second', start_time, end_time) AS secs, start_time, end_time\n    FROM ${db}.samples FINAL\n    WHERE type = 'sleep_analysis' AND category != 'in_bed' AND end_time >= toStartOfDay($__fromTime, '${tz}') - INTERVAL 6 HOUR AND end_time < $__toTime\n),\nbest AS (\n    SELECT night, argMax(source_name, asleep) AS src\n    FROM (SELECT night, source_name, sumIf(secs, category LIKE 'asleep%') AS asleep\n          FROM seg GROUP BY night, source_name)\n    GROUP BY night\n),\nnights AS (\n    SELECT seg.night AS night, seg.source_name AS source_name, seg.category AS category,\n           seg.secs AS secs, seg.start_time AS start_time, seg.end_time AS end_time\n    FROM seg INNER JOIN best ON seg.night = best.night AND seg.source_name = best.src\n)\nSELECT toString(night) AS `날짜`,\n  formatDateTime(minIf(start_time, category LIKE 'asleep%'), '%H:%i', '${tz}') AS `잠든 시각`,\n  formatDateTime(maxIf(end_time, category LIKE 'asleep%'), '%H:%i', '${tz}') AS `깬 시각`,\n  round(sumIf(secs, category LIKE 'asleep%') / 3600, 1) AS `총 수면(시간)`,\n  round(sumIf(secs, category = 'asleep_deep') / 60) AS `깊은(분)`,\n  round(sumIf(secs, category = 'asleep_core') / 60) AS `코어(분)`,\n  round(sumIf(secs, category = 'asleep_rem') / 60) AS `렘(분)`,\n  round(sumIf(secs, category = 'awake') / 60) AS `깸(분)`,\n  any(source_name) AS `기록 소스`\nFROM nights GROUP BY night ORDER BY night DESC",
+          "rawSql": "WITH seg AS (\n    SELECT toDate(end_time + INTERVAL 6 HOUR, '${tz}') AS night, source_name, category,\n           dateDiff('second', start_time, end_time) AS secs, start_time, end_time\n    FROM ${db}.samples FINAL\n    WHERE type = 'sleep_analysis' AND category != 'in_bed' AND end_time > now() - INTERVAL 90 DAY\n),\nbest AS (\n    SELECT night, argMax(source_name, asleep) AS src\n    FROM (SELECT night, source_name, sumIf(secs, category LIKE 'asleep%') AS asleep\n          FROM seg GROUP BY night, source_name)\n    GROUP BY night\n),\nnights AS (\n    SELECT seg.night AS night, seg.source_name AS source_name, seg.category AS category,\n           seg.secs AS secs, seg.start_time AS start_time, seg.end_time AS end_time\n    FROM seg INNER JOIN best ON seg.night = best.night AND seg.source_name = best.src\n),\nper AS (\n    SELECT night, night AS d, sumIf(secs, category LIKE 'asleep%') / 3600 AS h, (toHour(minIf(start_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(minIf(start_time, category LIKE 'asleep%'), '${tz}') + 360) % 1440 AS bed_m, toHour(maxIf(end_time, category LIKE 'asleep%'), '${tz}') * 60 + toMinute(maxIf(end_time, category LIKE 'asleep%'), '${tz}') AS wake_m\n    FROM nights GROUP BY night HAVING h >= 2\n)\nSELECT toString(toStartOfWeek(night, 1)) AS `주 시작(월)`, count() AS `기록된 밤`,\n  round(avg(h), 1) AS `수면(시간)`, countIf(h < 6) AS `6h 미만`,\n  formatDateTime(toDateTime('2000-01-01 18:00:00') + toIntervalMinute(toUInt32(greatest(round(avg(bed_m)), 0))), '%H:%i') AS `잠든 시각`, round(stddevPop(bed_m)) AS `편차(±분)`,\n  formatDateTime(toDateTime('2000-01-01 00:00:00') + toIntervalMinute(toUInt32(greatest(round(avg(wake_m)), 0))), '%H:%i') AS `기상 시각`\nFROM per GROUP BY toStartOfWeek(night, 1) ORDER BY 1 DESC LIMIT 12",
           "meta": {
             "builderOptions": {}
           },
@@ -947,7 +1384,72 @@
             "align": "auto",
             "cellOptions": {
               "type": "auto"
-            }
+            },
+            "minWidth": 50
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "수면(시간)"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "id": 18,
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 12,
+        "h": 14
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "table",
+      "title": "수면 기록 (일별)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH seg AS (\n    SELECT toDate(end_time + INTERVAL 6 HOUR, '${tz}') AS night, source_name, category,\n           dateDiff('second', start_time, end_time) AS secs, start_time, end_time\n    FROM ${db}.samples FINAL\n    WHERE type = 'sleep_analysis' AND category != 'in_bed' AND end_time >= toStartOfDay($__fromTime, '${tz}') - INTERVAL 6 HOUR AND end_time < $__toTime\n),\nbest AS (\n    SELECT night, argMax(source_name, asleep) AS src\n    FROM (SELECT night, source_name, sumIf(secs, category LIKE 'asleep%') AS asleep\n          FROM seg GROUP BY night, source_name)\n    GROUP BY night\n),\nnights AS (\n    SELECT seg.night AS night, seg.source_name AS source_name, seg.category AS category,\n           seg.secs AS secs, seg.start_time AS start_time, seg.end_time AS end_time\n    FROM seg INNER JOIN best ON seg.night = best.night AND seg.source_name = best.src\n)\nSELECT toString(night) AS `날짜`,\n  formatDateTime(minIf(start_time, category LIKE 'asleep%'), '%H:%i', '${tz}') AS `잠든 시각`,\n  formatDateTime(maxIf(end_time, category LIKE 'asleep%'), '%H:%i', '${tz}') AS `깬 시각`,\n  round(sumIf(secs, category LIKE 'asleep%') / 3600, 1) AS `총 수면(시간)`,\n  round(sumIf(secs, category = 'asleep_deep') / 60) AS `깊은(분)`,\n  round(sumIf(secs, category = 'asleep_core') / 60) AS `코어(분)`,\n  round(sumIf(secs, category = 'asleep_rem') / 60) AS `렘(분)`,\n  round(sumIf(secs, category = 'awake') / 60) AS `깸(분)`\nFROM nights GROUP BY night ORDER BY night DESC",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "minWidth": 50
           }
         },
         "overrides": []
@@ -959,12 +1461,12 @@
           "show": false
         }
       },
-      "id": 13,
+      "id": 19,
       "gridPos": {
-        "x": 0,
-        "y": 15,
-        "w": 24,
-        "h": 8
+        "x": 12,
+        "y": 44,
+        "w": 12,
+        "h": 14
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -973,12 +1475,12 @@
     },
     {
       "type": "row",
-      "id": 14,
+      "id": 20,
       "title": "② 심장 · 체력",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 23,
+        "y": 58,
         "w": 24,
         "h": 1
       },
@@ -986,7 +1488,7 @@
     },
     {
       "type": "timeseries",
-      "title": "안정시 심박 · 걷기 평균 심박",
+      "title": "안정시 심박 · 걷기 평균 심박 (일별)",
       "description": "둘 다 낮아질수록 심폐 체력이 좋아지는 신호",
       "targets": [
         {
@@ -1079,10 +1581,10 @@
           "sort": "none"
         }
       },
-      "id": 15,
+      "id": 21,
       "gridPos": {
         "x": 0,
-        "y": 24,
+        "y": 59,
         "w": 12,
         "h": 8
       },
@@ -1093,7 +1595,7 @@
     },
     {
       "type": "timeseries",
-      "title": "심박 변이도 (HRV)",
+      "title": "심박 변이도 HRV (일별)",
       "description": "SDNN 기준. 높을수록 회복 상태가 좋은 편",
       "targets": [
         {
@@ -1197,10 +1699,10 @@
           "sort": "none"
         }
       },
-      "id": 16,
+      "id": 22,
       "gridPos": {
         "x": 12,
-        "y": 24,
+        "y": 59,
         "w": 12,
         "h": 8
       },
@@ -1211,15 +1713,167 @@
     },
     {
       "type": "timeseries",
-      "title": "VO₂ max",
-      "description": "심폐 체력 추정치 (높을수록 좋음)",
+      "title": "안정시 심박 (월별)",
+      "description": "낮을수록 좋음",
       "targets": [
         {
           "refId": "A",
           "editorType": "sql",
           "format": 0,
           "queryType": "timeseries",
-          "rawSql": "SELECT toStartOfDay(start_time, '${tz}') AS time, transform(type, ['vo2_max'], ['VO₂ max'], type) AS series, avg(value) AS value\nFROM ${db}.samples FINAL\nWHERE type IN ('vo2_max') AND start_time >= toStartOfDay($__fromTime, '${tz}') AND start_time < $__toTime\nGROUP BY time, series ORDER BY time",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, avg(value) AS `안정시 심박`\nFROM ${db}.samples FINAL WHERE type = 'resting_heart_rate' AND $__timeFilter(start_time)\nGROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: bpm",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": null,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 23,
+      "gridPos": {
+        "x": 0,
+        "y": 67,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "HRV (월별)",
+      "description": "높을수록 좋음",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, avg(value) AS `HRV`\nFROM ${db}.samples FINAL WHERE type = 'heart_rate_variability' AND $__timeFilter(start_time)\nGROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": null,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 24,
+      "gridPos": {
+        "x": 6,
+        "y": 67,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "VO₂ max (월별)",
+      "description": "심폐 체력 추정치, 높을수록 좋음",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, avg(value) AS `VO₂ max`\nFROM ${db}.samples FINAL WHERE type = 'vo2_max' AND $__timeFilter(start_time)\nGROUP BY time ORDER BY time",
           "meta": {
             "builderOptions": {}
           },
@@ -1257,8 +1911,7 @@
           "color": {
             "mode": "fixed",
             "fixedColor": "#338ced"
-          },
-          "displayName": "${__field.labels.series}"
+          }
         },
         "overrides": []
       },
@@ -1273,12 +1926,13 @@
           "sort": "none"
         }
       },
-      "id": 17,
+      "timeFrom": "2y",
+      "id": 25,
       "gridPos": {
-        "x": 0,
-        "y": 32,
-        "w": 8,
-        "h": 7
+        "x": 12,
+        "y": 67,
+        "w": 6,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -1287,7 +1941,83 @@
     },
     {
       "type": "timeseries",
-      "title": "혈중 산소 (일 평균)",
+      "title": "걷기 평균 심박 (월별)",
+      "description": "같은 걷기에 심박이 낮을수록 체력이 좋음",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, avg(value) AS `걷기 평균 심박`\nFROM ${db}.samples FINAL WHERE type = 'walking_heart_rate_average' AND $__timeFilter(start_time)\nGROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: bpm",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": null,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 26,
+      "gridPos": {
+        "x": 18,
+        "y": 67,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "혈중 산소 (일별)",
       "description": "",
       "targets": [
         {
@@ -1349,12 +2079,12 @@
           "sort": "none"
         }
       },
-      "id": 18,
+      "id": 27,
       "gridPos": {
-        "x": 8,
-        "y": 32,
-        "w": 8,
-        "h": 7
+        "x": 0,
+        "y": 75,
+        "w": 6,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -1363,7 +2093,7 @@
     },
     {
       "type": "timeseries",
-      "title": "호흡수 (일 평균)",
+      "title": "호흡수 (일별)",
       "description": "",
       "targets": [
         {
@@ -1425,12 +2155,12 @@
           "sort": "none"
         }
       },
-      "id": 19,
+      "id": 28,
       "gridPos": {
-        "x": 16,
-        "y": 32,
-        "w": 8,
-        "h": 7
+        "x": 6,
+        "y": 75,
+        "w": 6,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -1579,11 +2309,11 @@
         }
       },
       "maxDataPoints": 400,
-      "id": 20,
+      "id": 29,
       "gridPos": {
-        "x": 0,
-        "y": 39,
-        "w": 24,
+        "x": 12,
+        "y": 75,
+        "w": 12,
         "h": 8
       },
       "datasource": {
@@ -1593,12 +2323,12 @@
     },
     {
       "type": "row",
-      "id": 21,
+      "id": 30,
       "title": "③ 활동 · 운동",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 47,
+        "y": 83,
         "w": 24,
         "h": 1
       },
@@ -1606,7 +2336,7 @@
     },
     {
       "type": "timeseries",
-      "title": "일별 운동 시간",
+      "title": "운동 시간 (일별)",
       "description": "회색 선: WHO 권장 주 150분 ≈ 하루 21분",
       "targets": [
         {
@@ -1681,10 +2411,10 @@
           "sort": "none"
         }
       },
-      "id": 22,
+      "id": 31,
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 84,
         "w": 12,
         "h": 8
       },
@@ -1695,7 +2425,7 @@
     },
     {
       "type": "timeseries",
-      "title": "주별 운동 기록 시간",
+      "title": "운동 기록 시간 (주별)",
       "description": "Watch로 기록한 운동(근력 운동 등)의 주간 합계, 월요일 시작",
       "targets": [
         {
@@ -1756,10 +2486,10 @@
           "sort": "none"
         }
       },
-      "id": 23,
+      "id": 32,
       "gridPos": {
         "x": 12,
-        "y": 48,
+        "y": 84,
         "w": 12,
         "h": 8
       },
@@ -1770,7 +2500,324 @@
     },
     {
       "type": "timeseries",
-      "title": "일별 에너지 소모",
+      "title": "운동 시간 (월별 하루 평균)",
+      "description": "회색 선: WHO 권장 주 150분 ≈ 하루 21분",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(d), '${tz}') AS time, avg(v) AS `운동 시간`\nFROM (SELECT toDate(bucket_start, '${tz}') AS d, sumIf(value, type = 'step_count') AS steps,\n             sumIf(value, type = 'exercise_time') AS v\n      FROM ${db}.quantity_stats FINAL\n      WHERE type IN ('step_count', 'exercise_time') AND $__timeFilter(bucket_start)\n      GROUP BY d HAVING steps > 0 AND d < toDate(now(), '${tz}'))\nGROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: 분",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "barAlignment": 1,
+            "barWidthFactor": 0.7,
+            "showPoints": "never",
+            "pointSize": 7,
+            "spanNulls": false,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8e8e8e",
+                "value": 21.4
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 33,
+      "gridPos": {
+        "x": 0,
+        "y": 92,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "운동 기록 횟수 (월별)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, count() AS `운동 횟수`\nFROM ${db}.workouts FINAL WHERE $__timeFilter(start_time) GROUP BY time ORDER BY time WITH FILL FROM toDateTime(toStartOfMonth(toDate($__fromTime, '${tz}')), '${tz}') TO toDateTime(toStartOfMonth(toDate($__toTime, '${tz}')), '${tz}') + INTERVAL 1 MONTH STEP INTERVAL 1 MONTH",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: 회",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "barAlignment": 1,
+            "barWidthFactor": 0.7,
+            "showPoints": "never",
+            "pointSize": 7,
+            "spanNulls": false,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 34,
+      "gridPos": {
+        "x": 6,
+        "y": 92,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "활동 에너지 (월별 하루 평균)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(d), '${tz}') AS time, avg(v) AS `활동 에너지`\nFROM (SELECT toDate(bucket_start, '${tz}') AS d, sumIf(value, type = 'step_count') AS steps,\n             sumIf(value, type = 'active_energy') AS v\n      FROM ${db}.quantity_stats FINAL\n      WHERE type IN ('step_count', 'active_energy') AND $__timeFilter(bucket_start)\n      GROUP BY d HAVING steps > 0 AND d < toDate(now(), '${tz}'))\nGROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: kcal",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "barAlignment": 1,
+            "barWidthFactor": 0.7,
+            "showPoints": "never",
+            "pointSize": 7,
+            "spanNulls": false,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 35,
+      "gridPos": {
+        "x": 12,
+        "y": 92,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "걸음 수 (월별 하루 평균)",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(d), '${tz}') AS time, avg(v) AS `걸음 수`\nFROM (SELECT toDate(bucket_start, '${tz}') AS d, sumIf(value, type = 'step_count') AS steps,\n             sumIf(value, type = 'step_count') AS v\n      FROM ${db}.quantity_stats FINAL\n      WHERE type IN ('step_count', 'step_count') AND $__timeFilter(bucket_start)\n      GROUP BY d HAVING steps > 0 AND d < toDate(now(), '${tz}'))\nGROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "barAlignment": 1,
+            "barWidthFactor": 0.7,
+            "showPoints": "never",
+            "pointSize": 7,
+            "spanNulls": false,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 36,
+      "gridPos": {
+        "x": 18,
+        "y": 92,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "에너지 소모 (일별)",
       "description": "막대 전체 높이 = 총 소모 에너지",
       "targets": [
         {
@@ -1863,10 +2910,10 @@
           "sort": "none"
         }
       },
-      "id": 24,
+      "id": 37,
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 100,
         "w": 12,
         "h": 8
       },
@@ -1877,7 +2924,7 @@
     },
     {
       "type": "timeseries",
-      "title": "일별 걸음 수",
+      "title": "걸음 수 (일별)",
       "description": "회색 선: 10,000보",
       "targets": [
         {
@@ -1952,10 +2999,10 @@
           "sort": "none"
         }
       },
-      "id": 25,
+      "id": 38,
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 100,
         "w": 12,
         "h": 8
       },
@@ -1966,7 +3013,7 @@
     },
     {
       "type": "timeseries",
-      "title": "일별 스탠드 시간",
+      "title": "스탠드 시간 (일별)",
       "description": "",
       "targets": [
         {
@@ -2028,10 +3075,10 @@
           "sort": "none"
         }
       },
-      "id": 26,
+      "id": 39,
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 108,
         "w": 8,
         "h": 7
       },
@@ -2042,7 +3089,7 @@
     },
     {
       "type": "timeseries",
-      "title": "일별 오른 층수",
+      "title": "오른 층수 (일별)",
       "description": "",
       "targets": [
         {
@@ -2104,10 +3151,10 @@
           "sort": "none"
         }
       },
-      "id": 27,
+      "id": 40,
       "gridPos": {
         "x": 8,
-        "y": 64,
+        "y": 108,
         "w": 8,
         "h": 7
       },
@@ -2118,7 +3165,7 @@
     },
     {
       "type": "timeseries",
-      "title": "일별 걷기·달리기 거리",
+      "title": "걷기·달리기 거리 (일별)",
       "description": "",
       "targets": [
         {
@@ -2180,10 +3227,10 @@
           "sort": "none"
         }
       },
-      "id": 28,
+      "id": 41,
       "gridPos": {
         "x": 16,
-        "y": 64,
+        "y": 108,
         "w": 8,
         "h": 7
       },
@@ -2248,12 +3295,12 @@
           "fields": ""
         }
       },
-      "id": 29,
+      "id": 42,
       "gridPos": {
         "x": 0,
-        "y": 71,
-        "w": 12,
-        "h": 7
+        "y": 115,
+        "w": 6,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -2315,12 +3362,12 @@
           "sort": "none"
         }
       },
-      "id": 30,
+      "id": 43,
       "gridPos": {
-        "x": 12,
-        "y": 71,
-        "w": 12,
-        "h": 7
+        "x": 6,
+        "y": 115,
+        "w": 8,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -2337,7 +3384,7 @@
           "editorType": "sql",
           "format": 1,
           "queryType": "table",
-          "rawSql": "SELECT start_time AS `시작`, transform(activity_type, ['running', 'walking', 'hiking', 'cycling', 'swimming', 'yoga', 'pilates', 'dance', 'cardio_dance', 'functional_strength_training', 'traditional_strength_training', 'core_training', 'high_intensity_interval_training', 'mixed_cardio', 'elliptical', 'rowing', 'stair_climbing', 'stairs', 'step_training', 'jump_rope', 'flexibility', 'cooldown', 'mind_and_body', 'tai_chi', 'tennis', 'badminton', 'table_tennis', 'pickleball', 'soccer', 'basketball', 'baseball', 'volleyball', 'golf', 'climbing', 'boxing', 'kickboxing', 'martial_arts', 'skating_sports', 'snowboarding', 'downhill_skiing', 'cross_country_skiing', 'fitness_gaming', 'swim_bike_run', 'hand_cycling', 'wheelchair_walk_pace', 'wheelchair_run_pace', 'other'], ['달리기', '걷기', '하이킹', '사이클', '수영', '요가', '필라테스', '댄스', '카디오 댄스', '기능성 근력', '근력 운동', '코어 운동', 'HIIT', '혼합 유산소', '일립티컬', '로잉', '계단 오르기', '계단', '스텝', '줄넘기', '유연성', '쿨다운', '마음 챙김 운동', '태극권', '테니스', '배드민턴', '탁구', '피클볼', '축구', '농구', '야구', '배구', '골프', '클라이밍', '복싱', '킥복싱', '무술', '스케이팅', '스노보드', '스키', '크로스컨트리 스키', '피트니스 게임', '철인 3종', '핸드 사이클', '휠체어(걷기)', '휠체어(달리기)', '기타'], activity_type) AS `운동`, round(duration_s / 60) AS `시간(분)`,\n  round(energy_kcal) AS `kcal`, round(distance_m / 1000, 2) AS `거리(km)`,\n  round(avg_heart_rate) AS `평균 심박`, round(max_heart_rate) AS `최고 심박`, source_name AS `기록 기기`\nFROM ${db}.workouts FINAL WHERE $__timeFilter(start_time) ORDER BY start_time DESC LIMIT 200",
+          "rawSql": "SELECT formatDateTime(start_time, '%m-%d %H:%i', '${tz}') AS `시작`, transform(activity_type, ['running', 'walking', 'hiking', 'cycling', 'swimming', 'yoga', 'pilates', 'dance', 'cardio_dance', 'functional_strength_training', 'traditional_strength_training', 'core_training', 'high_intensity_interval_training', 'mixed_cardio', 'elliptical', 'rowing', 'stair_climbing', 'stairs', 'step_training', 'jump_rope', 'flexibility', 'cooldown', 'mind_and_body', 'tai_chi', 'tennis', 'badminton', 'table_tennis', 'pickleball', 'soccer', 'basketball', 'baseball', 'volleyball', 'golf', 'climbing', 'boxing', 'kickboxing', 'martial_arts', 'skating_sports', 'snowboarding', 'downhill_skiing', 'cross_country_skiing', 'fitness_gaming', 'swim_bike_run', 'hand_cycling', 'wheelchair_walk_pace', 'wheelchair_run_pace', 'other'], ['달리기', '걷기', '하이킹', '사이클', '수영', '요가', '필라테스', '댄스', '카디오 댄스', '기능성 근력', '근력 운동', '코어 운동', 'HIIT', '혼합 유산소', '일립티컬', '로잉', '계단 오르기', '계단', '스텝', '줄넘기', '유연성', '쿨다운', '마음 챙김 운동', '태극권', '테니스', '배드민턴', '탁구', '피클볼', '축구', '농구', '야구', '배구', '골프', '클라이밍', '복싱', '킥복싱', '무술', '스케이팅', '스노보드', '스키', '크로스컨트리 스키', '피트니스 게임', '철인 3종', '핸드 사이클', '휠체어(걷기)', '휠체어(달리기)', '기타'], activity_type) AS `운동`,\n  round(duration_s / 60) AS `시간(분)`, round(energy_kcal) AS `kcal`, round(distance_m / 1000, 2) AS `거리(km)`,\n  round(avg_heart_rate) AS `평균 심박`, round(max_heart_rate) AS `최고 심박`\nFROM ${db}.workouts FINAL WHERE $__timeFilter(start_time) ORDER BY start_time DESC LIMIT 200",
           "meta": {
             "builderOptions": {}
           },
@@ -2353,7 +3400,8 @@
             "align": "auto",
             "cellOptions": {
               "type": "auto"
-            }
+            },
+            "minWidth": 50
           }
         },
         "overrides": []
@@ -2365,11 +3413,11 @@
           "show": false
         }
       },
-      "id": 31,
+      "id": 44,
       "gridPos": {
-        "x": 0,
-        "y": 78,
-        "w": 24,
+        "x": 14,
+        "y": 115,
+        "w": 10,
         "h": 8
       },
       "datasource": {
@@ -2379,12 +3427,12 @@
     },
     {
       "type": "row",
-      "id": 32,
+      "id": 45,
       "title": "④ 보행 (iPhone 측정)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 86,
+        "y": 123,
         "w": 24,
         "h": 1
       },
@@ -2392,8 +3440,115 @@
     },
     {
       "type": "timeseries",
-      "title": "걷기 비대칭 (일 평균)",
+      "title": "걷기 비대칭 (월별)",
       "description": "좌우 걸음 시간 차이. iPhone을 바지 주머니에 넣고 걸을 때 측정되며, 휴대 방식에 따라 달라질 수 있음",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, avg(value) * 100 AS `평균 비대칭`,\n       countIf(value > 0.2) / count() * 100 AS `20% 초과 측정 비율`\nFROM ${db}.samples FINAL WHERE type = 'walking_asymmetry' AND $__timeFilter(start_time)\nGROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "평균 비대칭"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#338ced"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "20% 초과 측정 비율"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e76624"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "timeFrom": "2y",
+      "id": 46,
+      "gridPos": {
+        "x": 0,
+        "y": 124,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "걷기 비대칭 (일별)",
+      "description": "",
       "targets": [
         {
           "refId": "A",
@@ -2454,12 +3609,12 @@
           "sort": "none"
         }
       },
-      "id": 33,
+      "id": 47,
       "gridPos": {
-        "x": 0,
-        "y": 87,
-        "w": 8,
-        "h": 7
+        "x": 12,
+        "y": 124,
+        "w": 12,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -2468,7 +3623,7 @@
     },
     {
       "type": "timeseries",
-      "title": "걷기 속도 (일 평균)",
+      "title": "걷기 속도 (월별)",
       "description": "",
       "targets": [
         {
@@ -2476,7 +3631,7 @@
           "editorType": "sql",
           "format": 0,
           "queryType": "timeseries",
-          "rawSql": "SELECT toStartOfDay(start_time, '${tz}') AS time, transform(type, ['walking_speed'], ['걷기 속도'], type) AS series, avg(value) * 3.6 AS value\nFROM ${db}.samples FINAL\nWHERE type IN ('walking_speed') AND start_time >= toStartOfDay($__fromTime, '${tz}') AND start_time < $__toTime\nGROUP BY time, series ORDER BY time",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, avg(value) * 3.6 AS `걷기 속도`\nFROM ${db}.samples FINAL WHERE type = 'walking_speed' AND $__timeFilter(start_time)\nGROUP BY time ORDER BY time",
           "meta": {
             "builderOptions": {}
           },
@@ -2514,8 +3669,7 @@
           "color": {
             "mode": "fixed",
             "fixedColor": "#338ced"
-          },
-          "displayName": "${__field.labels.series}"
+          }
         },
         "overrides": []
       },
@@ -2530,11 +3684,12 @@
           "sort": "none"
         }
       },
-      "id": 34,
+      "timeFrom": "2y",
+      "id": 48,
       "gridPos": {
-        "x": 8,
-        "y": 87,
-        "w": 8,
+        "x": 0,
+        "y": 132,
+        "w": 12,
         "h": 7
       },
       "datasource": {
@@ -2544,7 +3699,7 @@
     },
     {
       "type": "timeseries",
-      "title": "보폭 (일 평균)",
+      "title": "보폭 (월별)",
       "description": "",
       "targets": [
         {
@@ -2552,7 +3707,7 @@
           "editorType": "sql",
           "format": 0,
           "queryType": "timeseries",
-          "rawSql": "SELECT toStartOfDay(start_time, '${tz}') AS time, transform(type, ['walking_step_length'], ['보폭'], type) AS series, avg(value) * 100 AS value\nFROM ${db}.samples FINAL\nWHERE type IN ('walking_step_length') AND start_time >= toStartOfDay($__fromTime, '${tz}') AND start_time < $__toTime\nGROUP BY time, series ORDER BY time",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, avg(value) * 100 AS `보폭`\nFROM ${db}.samples FINAL WHERE type = 'walking_step_length' AND $__timeFilter(start_time)\nGROUP BY time ORDER BY time",
           "meta": {
             "builderOptions": {}
           },
@@ -2590,8 +3745,7 @@
           "color": {
             "mode": "fixed",
             "fixedColor": "#338ced"
-          },
-          "displayName": "${__field.labels.series}"
+          }
         },
         "overrides": []
       },
@@ -2606,11 +3760,12 @@
           "sort": "none"
         }
       },
-      "id": 35,
+      "timeFrom": "2y",
+      "id": 49,
       "gridPos": {
-        "x": 16,
-        "y": 87,
-        "w": 8,
+        "x": 12,
+        "y": 132,
+        "w": 12,
         "h": 7
       },
       "datasource": {
@@ -2620,12 +3775,12 @@
     },
     {
       "type": "row",
-      "id": 36,
-      "title": "⑤ 체성분",
+      "id": 50,
+      "title": "⑤ 체성분 · 알림",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 94,
+        "y": 139,
         "w": 24,
         "h": 1
       },
@@ -2633,7 +3788,7 @@
     },
     {
       "type": "timeseries",
-      "title": "체중",
+      "title": "체중 · 제지방량",
       "description": "",
       "targets": [
         {
@@ -2641,7 +3796,7 @@
           "editorType": "sql",
           "format": 0,
           "queryType": "timeseries",
-          "rawSql": "SELECT start_time AS time, value AS `체중` FROM ${db}.samples FINAL\nWHERE type = 'body_mass' AND $__timeFilter(start_time) ORDER BY time",
+          "rawSql": "SELECT start_time AS time, transform(type, ['body_mass', 'lean_body_mass'], ['체중', '제지방량'], type) AS series,\n       value FROM ${db}.samples FINAL\nWHERE type IN ('body_mass', 'lean_body_mass') AND $__timeFilter(start_time) ORDER BY time",
           "meta": {
             "builderOptions": {}
           },
@@ -2679,102 +3834,60 @@
           "color": {
             "mode": "fixed",
             "fixedColor": "#338ced"
-          }
+          },
+          "displayName": "${__field.labels.series}"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "체중"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#338ced"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "제지방량"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e76624"
+                }
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": false
+          "showLegend": true
         },
         "tooltip": {
-          "mode": "single",
+          "mode": "multi",
           "sort": "none"
         }
       },
-      "id": 37,
+      "timeFrom": "2y",
+      "id": 51,
       "gridPos": {
         "x": 0,
-        "y": 95,
-        "w": 6,
-        "h": 7
-      },
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "apple-health-ch"
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "제지방량",
-      "description": "",
-      "targets": [
-        {
-          "refId": "A",
-          "editorType": "sql",
-          "format": 0,
-          "queryType": "timeseries",
-          "rawSql": "SELECT start_time AS time, value AS `제지방량` FROM ${db}.samples FINAL\nWHERE type = 'lean_body_mass' AND $__timeFilter(start_time) ORDER BY time",
-          "meta": {
-            "builderOptions": {}
-          },
-          "datasource": {
-            "type": "grafana-clickhouse-datasource",
-            "uid": "apple-health-ch"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "masskg",
-          "decimals": 1,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "barAlignment": 0,
-            "barWidthFactor": 0.7,
-            "showPoints": "always",
-            "pointSize": 7,
-            "spanNulls": true,
-            "lineInterpolation": "linear",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisSoftMin": null,
-            "gradientMode": "none",
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#338ced"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "id": 38,
-      "gridPos": {
-        "x": 6,
-        "y": 95,
-        "w": 6,
-        "h": 7
+        "y": 140,
+        "w": 10,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -2844,12 +3957,13 @@
           "sort": "none"
         }
       },
-      "id": 39,
+      "timeFrom": "2y",
+      "id": 52,
       "gridPos": {
-        "x": 12,
-        "y": 95,
-        "w": 6,
-        "h": 7
+        "x": 10,
+        "y": 140,
+        "w": 7,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -2858,15 +3972,15 @@
     },
     {
       "type": "timeseries",
-      "title": "BMI",
-      "description": "",
+      "title": "심박 알림 (월별 횟수)",
+      "description": "Apple Watch의 높은/낮은 심박·불규칙 리듬 알림 합계. 기록이 없다면 Watch 앱 › 심장에서 알림이 켜져 있는지 확인",
       "targets": [
         {
           "refId": "A",
           "editorType": "sql",
           "format": 0,
           "queryType": "timeseries",
-          "rawSql": "SELECT start_time AS time, value AS `BMI` FROM ${db}.samples FINAL\nWHERE type = 'body_mass_index' AND $__timeFilter(start_time) ORDER BY time",
+          "rawSql": "SELECT toDateTime(toStartOfMonth(start_time, '${tz}'), '${tz}') AS time, count() AS `심박 알림`\nFROM ${db}.samples FINAL\nWHERE type IN ('high_heart_rate_event', 'low_heart_rate_event', 'irregular_heart_rhythm_event')\n  AND $__timeFilter(start_time) GROUP BY time ORDER BY time WITH FILL FROM toDateTime(toStartOfMonth(toDate($__fromTime, '${tz}')), '${tz}') TO toDateTime(toStartOfMonth(toDate($__toTime, '${tz}')), '${tz}') + INTERVAL 1 MONTH STEP INTERVAL 1 MONTH",
           "meta": {
             "builderOptions": {}
           },
@@ -2878,24 +3992,24 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
-          "decimals": 1,
+          "unit": "suffix: 회",
+          "decimals": 0,
           "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "barAlignment": 0,
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "barAlignment": 1,
             "barWidthFactor": 0.7,
-            "showPoints": "always",
+            "showPoints": "never",
             "pointSize": 7,
-            "spanNulls": true,
+            "spanNulls": false,
             "lineInterpolation": "linear",
             "stacking": {
               "mode": "none",
               "group": "A"
             },
             "axisPlacement": "auto",
-            "axisSoftMin": null,
+            "axisSoftMin": 0,
             "gradientMode": "none",
             "thresholdsStyle": {
               "mode": "off"
@@ -2919,12 +4033,13 @@
           "sort": "none"
         }
       },
-      "id": 40,
+      "timeFrom": "2y",
+      "id": 53,
       "gridPos": {
-        "x": 18,
-        "y": 95,
-        "w": 6,
-        "h": 7
+        "x": 17,
+        "y": 140,
+        "w": 7,
+        "h": 8
       },
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -2933,391 +4048,393 @@
     },
     {
       "type": "row",
-      "id": 41,
+      "id": 54,
       "title": "동기화 상태",
-      "collapsed": false,
+      "collapsed": true,
       "gridPos": {
         "x": 0,
-        "y": 102,
+        "y": 148,
         "w": 24,
         "h": 1
       },
-      "panels": []
-    },
-    {
-      "type": "stat",
-      "title": "동기화 기기",
-      "description": "",
-      "targets": [
+      "panels": [
         {
-          "refId": "A",
-          "editorType": "sql",
-          "format": 1,
-          "queryType": "table",
-          "rawSql": "SELECT argMax(device_name, received_at) AS v FROM ${db}.sync_log",
-          "meta": {
-            "builderOptions": {}
-          },
-          "datasource": {
-            "type": "grafana-clickhouse-datasource",
-            "uid": "apple-health-ch"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": null,
-          "noValue": "–",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "text"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
+          "type": "stat",
+          "title": "동기화 기기",
+          "description": "",
+          "targets": [
+            {
+              "refId": "A",
+              "editorType": "sql",
+              "format": 1,
+              "queryType": "table",
+              "rawSql": "SELECT argMax(device_name, received_at) AS v FROM ${db}.sync_log",
+              "meta": {
+                "builderOptions": {}
+              },
+              "datasource": {
+                "type": "grafana-clickhouse-datasource",
+                "uid": "apple-health-ch"
               }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "textMode": "value",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
+            }
           ],
-          "fields": "/.*/",
-          "values": false
-        }
-      },
-      "id": 42,
-      "gridPos": {
-        "x": 0,
-        "y": 103,
-        "w": 8,
-        "h": 4
-      },
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "apple-health-ch"
-      }
-    },
-    {
-      "type": "stat",
-      "title": "저장된 샘플",
-      "description": "",
-      "targets": [
-        {
-          "refId": "A",
-          "editorType": "sql",
-          "format": 1,
-          "queryType": "table",
-          "rawSql": "SELECT count() AS v FROM ${db}.samples FINAL",
-          "meta": {
-            "builderOptions": {}
-          },
-          "datasource": {
-            "type": "grafana-clickhouse-datasource",
-            "uid": "apple-health-ch"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "locale",
-          "decimals": 0,
-          "noValue": "–",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "text"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": null,
+              "noValue": "–",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "text"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
               }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "textMode": "value",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      },
-      "id": 43,
-      "gridPos": {
-        "x": 8,
-        "y": 103,
-        "w": 8,
-        "h": 4
-      },
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "apple-health-ch"
-      }
-    },
-    {
-      "type": "stat",
-      "title": "저장된 운동",
-      "description": "",
-      "targets": [
-        {
-          "refId": "A",
-          "editorType": "sql",
-          "format": 1,
-          "queryType": "table",
-          "rawSql": "SELECT count() AS v FROM ${db}.workouts FINAL",
-          "meta": {
-            "builderOptions": {}
-          },
-          "datasource": {
-            "type": "grafana-clickhouse-datasource",
-            "uid": "apple-health-ch"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "locale",
-          "decimals": 0,
-          "noValue": "–",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "text"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "textMode": "value",
-        "wideLayout": true,
-        "showPercentChange": false,
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      },
-      "id": 44,
-      "gridPos": {
-        "x": 16,
-        "y": 103,
-        "w": 8,
-        "h": 4
-      },
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "apple-health-ch"
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "수신 이력",
-      "description": "",
-      "targets": [
-        {
-          "refId": "A",
-          "editorType": "sql",
-          "format": 0,
-          "queryType": "timeseries",
-          "rawSql": "SELECT $__timeInterval(received_at) AS time, sum(samples) AS `샘플`, sum(stats) AS `시간별 통계`, sum(workouts) AS `운동`\nFROM ${db}.sync_log WHERE $__timeFilter(received_at) GROUP BY time ORDER BY time",
-          "meta": {
-            "builderOptions": {}
-          },
-          "datasource": {
-            "type": "grafana-clickhouse-datasource",
-            "uid": "apple-health-ch"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "locale",
-          "decimals": 0,
-          "custom": {
-            "drawStyle": "bars",
-            "lineWidth": 1,
-            "fillOpacity": 85,
-            "barAlignment": 0,
-            "barWidthFactor": 0.7,
-            "showPoints": "never",
-            "pointSize": 7,
-            "spanNulls": false,
-            "lineInterpolation": "linear",
-            "stacking": {
-              "mode": "normal",
-              "group": "A"
             },
-            "axisPlacement": "auto",
-            "axisSoftMin": 0,
-            "gradientMode": "none",
-            "thresholdsStyle": {
-              "mode": "off"
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "textMode": "value",
+            "wideLayout": true,
+            "showPercentChange": false,
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "/.*/",
+              "values": false
             }
           },
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#338ced"
+          "id": 55,
+          "gridPos": {
+            "x": 0,
+            "y": 149,
+            "w": 8,
+            "h": 4
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "샘플"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#338ced"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "시간별 통계"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#e76624"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "운동"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#00a888"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "id": 45,
-      "gridPos": {
-        "x": 0,
-        "y": 107,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "apple-health-ch"
-      }
-    },
-    {
-      "type": "table",
-      "title": "저장된 데이터",
-      "description": "",
-      "targets": [
         {
-          "refId": "A",
-          "editorType": "sql",
-          "format": 1,
-          "queryType": "table",
-          "rawSql": "SELECT type AS `타입`, '샘플' AS `구분`, count() AS `건수`, min(start_time) AS `최초`, max(end_time) AS `최신`\nFROM ${db}.samples FINAL GROUP BY type\nUNION ALL SELECT type, '시간별 통계', count(), min(bucket_start), max(bucket_end) FROM ${db}.quantity_stats FINAL GROUP BY type\nUNION ALL SELECT 'workout', '운동', count(), min(start_time), max(end_time) FROM ${db}.workouts FINAL HAVING count() > 0\nORDER BY 1, 2",
-          "meta": {
-            "builderOptions": {}
+          "type": "stat",
+          "title": "저장된 샘플",
+          "description": "",
+          "targets": [
+            {
+              "refId": "A",
+              "editorType": "sql",
+              "format": 1,
+              "queryType": "table",
+              "rawSql": "SELECT count() AS v FROM ${db}.samples FINAL",
+              "meta": {
+                "builderOptions": {}
+              },
+              "datasource": {
+                "type": "grafana-clickhouse-datasource",
+                "uid": "apple-health-ch"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "locale",
+              "decimals": 0,
+              "noValue": "–",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "text"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "textMode": "value",
+            "wideLayout": true,
+            "showPercentChange": false,
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "id": 56,
+          "gridPos": {
+            "x": 8,
+            "y": 149,
+            "w": 8,
+            "h": 4
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "저장된 운동",
+          "description": "",
+          "targets": [
+            {
+              "refId": "A",
+              "editorType": "sql",
+              "format": 1,
+              "queryType": "table",
+              "rawSql": "SELECT count() AS v FROM ${db}.workouts FINAL",
+              "meta": {
+                "builderOptions": {}
+              },
+              "datasource": {
+                "type": "grafana-clickhouse-datasource",
+                "uid": "apple-health-ch"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "locale",
+              "decimals": 0,
+              "noValue": "–",
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "text"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "none",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "textMode": "value",
+            "wideLayout": true,
+            "showPercentChange": false,
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "id": 57,
+          "gridPos": {
+            "x": 16,
+            "y": 149,
+            "w": 8,
+            "h": 4
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "수신 이력",
+          "description": "",
+          "targets": [
+            {
+              "refId": "A",
+              "editorType": "sql",
+              "format": 0,
+              "queryType": "timeseries",
+              "rawSql": "SELECT $__timeInterval(received_at) AS time, sum(samples) AS `샘플`, sum(stats) AS `시간별 통계`, sum(workouts) AS `운동`\nFROM ${db}.sync_log WHERE $__timeFilter(received_at) GROUP BY time ORDER BY time",
+              "meta": {
+                "builderOptions": {}
+              },
+              "datasource": {
+                "type": "grafana-clickhouse-datasource",
+                "uid": "apple-health-ch"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "locale",
+              "decimals": 0,
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 1,
+                "fillOpacity": 85,
+                "barAlignment": 0,
+                "barWidthFactor": 0.7,
+                "showPoints": "never",
+                "pointSize": 7,
+                "spanNulls": false,
+                "lineInterpolation": "linear",
+                "stacking": {
+                  "mode": "normal",
+                  "group": "A"
+                },
+                "axisPlacement": "auto",
+                "axisSoftMin": 0,
+                "gradientMode": "none",
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "#338ced"
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "샘플"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#338ced"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "시간별 통계"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e76624"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "운동"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#00a888"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
+          },
+          "id": 58,
+          "gridPos": {
+            "x": 0,
+            "y": 153,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        },
+        {
+          "type": "table",
+          "title": "저장된 데이터",
+          "description": "",
+          "targets": [
+            {
+              "refId": "A",
+              "editorType": "sql",
+              "format": 1,
+              "queryType": "table",
+              "rawSql": "SELECT type AS `타입`, '샘플' AS `구분`, count() AS `건수`, min(start_time) AS `최초`, max(end_time) AS `최신`\nFROM ${db}.samples FINAL GROUP BY type\nUNION ALL SELECT type, '시간별 통계', count(), min(bucket_start), max(bucket_end) FROM ${db}.quantity_stats FINAL GROUP BY type\nUNION ALL SELECT 'workout', '운동', count(), min(start_time), max(end_time) FROM ${db}.workouts FINAL HAVING count() > 0\nORDER BY 1, 2",
+              "meta": {
+                "builderOptions": {}
+              },
+              "datasource": {
+                "type": "grafana-clickhouse-datasource",
+                "uid": "apple-health-ch"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "minWidth": 50
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "id": 59,
+          "gridPos": {
+            "x": 12,
+            "y": 153,
+            "w": 12,
+            "h": 8
           },
           "datasource": {
             "type": "grafana-clickhouse-datasource",
             "uid": "apple-health-ch"
           }
         }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
-      "id": 46,
-      "gridPos": {
-        "x": 12,
-        "y": 107,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "apple-health-ch"
-      }
+      ]
     }
   ]
 }

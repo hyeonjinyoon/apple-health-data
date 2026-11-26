@@ -441,7 +441,8 @@
             "align": "auto",
             "cellOptions": {
               "type": "auto"
-            }
+            },
+            "minWidth": 50
           }
         },
         "overrides": []
