@@ -1,0 +1,6 @@
+// Shared build settings. Personal signing values go in Signing.xcconfig (git-ignored):
+//   make signing TEAM=XXXXXXXXXX [PREFIX=com.yourname]
+BUNDLE_ID_PREFIX = com.example
+DEVELOPMENT_TEAM =
+
+#include? "Signing.xcconfig"

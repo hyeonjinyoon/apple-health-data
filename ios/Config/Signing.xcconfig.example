@@ -1,0 +1,4 @@
+// Copy to Signing.xcconfig (or run `make signing TEAM=...`). Find your Team ID in
+// Xcode → Settings → Accounts, or developer.apple.com → Membership.
+DEVELOPMENT_TEAM = XXXXXXXXXX
+BUNDLE_ID_PREFIX = com.yourname

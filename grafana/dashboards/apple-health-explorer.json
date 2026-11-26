@@ -1,0 +1,632 @@
+{
+  "uid": "apple-health-explorer",
+  "title": "Apple Health — 데이터 탐색기",
+  "description": "수집된 모든 HealthKit 타입을 골라 원본 값을 살펴보는 대시보드",
+  "tags": [
+    "apple-health"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "links": [
+    {
+      "type": "dashboards",
+      "tags": [
+        "apple-health"
+      ],
+      "asDropdown": false,
+      "includeVars": true,
+      "keepTime": true,
+      "title": "Apple Health",
+      "icon": "external link"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "type": "custom",
+        "name": "db",
+        "label": "데이터베이스",
+        "hide": 2,
+        "query": "health,health_demo",
+        "current": {
+          "text": "health",
+          "value": "health"
+        },
+        "options": [
+          {
+            "text": "health",
+            "value": "health",
+            "selected": true
+          },
+          {
+            "text": "health_demo",
+            "value": "health_demo",
+            "selected": false
+          }
+        ]
+      },
+      {
+        "type": "constant",
+        "name": "tz",
+        "hide": 2,
+        "query": "Asia/Seoul",
+        "current": {
+          "text": "Asia/Seoul",
+          "value": "Asia/Seoul"
+        }
+      },
+      {
+        "type": "query",
+        "name": "metric",
+        "label": "샘플 타입",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "apple-health-ch"
+        },
+        "query": "SELECT DISTINCT type FROM ${db}.samples ORDER BY type",
+        "definition": "SELECT DISTINCT type FROM ${db}.samples ORDER BY type",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {},
+        "options": []
+      },
+      {
+        "type": "query",
+        "name": "stat_metric",
+        "label": "통계 타입",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "apple-health-ch"
+        },
+        "query": "SELECT DISTINCT type FROM ${db}.quantity_stats ORDER BY type",
+        "definition": "SELECT DISTINCT type FROM ${db}.quantity_stats ORDER BY type",
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {},
+        "options": []
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "샘플 타입: ${metric}",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "${metric} — 평균 · 범위",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT $__timeInterval(start_time) AS time, avg(value) AS `평균`, min(value) AS `최저`, max(value) AS `최고`\nFROM ${db}.samples FINAL WHERE type = '${metric}' AND $__timeFilter(start_time) GROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": null,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "auto",
+            "pointSize": 7,
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": null,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "평균"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#338ced"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "최저"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#338ced"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "최고"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#338ced"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "최고"
+            },
+            "properties": [
+              {
+                "id": "custom.fillBelowTo",
+                "value": "최저"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 18
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "최저"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "maxDataPoints": 500,
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "${metric} — 일별 평균",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toStartOfDay(start_time, '${tz}') AS time, avg(value) AS `일 평균`\nFROM ${db}.samples FINAL WHERE type = '${metric}' AND start_time >= toStartOfDay($__fromTime, '${tz}') AND start_time < $__toTime GROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": null,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "always",
+            "pointSize": 7,
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": null,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "${metric} — 소스별 샘플 수",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT if(source_name = '', '(알 수 없음)', source_name) AS `소스`, count() AS `건수`\nFROM ${db}.samples FINAL WHERE type = '${metric}' AND $__timeFilter(start_time) GROUP BY `소스` ORDER BY `건수` DESC LIMIT 10",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#338ced",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "valueMode": "text",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "sizing": "auto",
+        "minVizHeight": 16,
+        "maxVizHeight": 28,
+        "reduceOptions": {
+          "values": true,
+          "calcs": [],
+          "fields": ""
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "table",
+      "title": "${metric} — 최근 샘플",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "SELECT start_time AS `시작`, end_time AS `종료`, value AS `값`, unit AS `단위`, category AS `분류`,\n  source_name AS `소스`, device AS `기기`, toJSONString(metadata) AS `메타데이터`\nFROM ${db}.samples FINAL WHERE type = '${metric}' AND $__timeFilter(start_time) ORDER BY start_time DESC LIMIT 500",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "row",
+      "id": 6,
+      "title": "시간별 통계 타입: ${stat_metric}",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "${stat_metric} — 일별 합계",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT toStartOfDay(bucket_start, '${tz}') AS time, sum(value) AS `일 합계`\nFROM ${db}.quantity_stats FINAL WHERE type = '${stat_metric}' AND bucket_start >= toStartOfDay($__fromTime, '${tz}') AND bucket_start < $__toTime GROUP BY time ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": null,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "never",
+            "pointSize": 7,
+            "spanNulls": false,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "${stat_metric} — 시간별 합계",
+      "description": "",
+      "targets": [
+        {
+          "refId": "A",
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "SELECT bucket_start AS time, value AS `시간 합계`\nFROM ${db}.quantity_stats FINAL WHERE type = '${stat_metric}' AND $__timeFilter(bucket_start) ORDER BY time",
+          "meta": {
+            "builderOptions": {}
+          },
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "apple-health-ch"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": null,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "barAlignment": 0,
+            "barWidthFactor": 0.7,
+            "showPoints": "never",
+            "pointSize": 7,
+            "spanNulls": false,
+            "lineInterpolation": "linear",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#338ced"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 12,
+        "y": 29,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "apple-health-ch"
+      }
+    }
+  ]
+}
